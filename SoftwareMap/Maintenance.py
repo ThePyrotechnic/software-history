@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from typing import Dict, List, Set, Tuple
@@ -27,6 +28,8 @@ class Tasks:
             logger.info("Complete")
 
         logger.info("Fetching current list of WikiData software . . .")
+        # Note: This query times out often. It may be possible to run this query in "rings"
+        # i.e. "get all items related to software with exactly n depth"
         wikidata_software = _sparql_results(
             """SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {
                   ?item wdt:P31 ?type.
@@ -99,7 +102,7 @@ def add_parents(tx, class_: Dict, parents: List[Dict]):
     """
     for parent in parents:
         tx.run("MERGE (sub:Class {uri: $sub_uri})"
-               "    ON CREATE SET sub.label = $sub_label, sub.created: datetime()"  # Don't re-set the label
+               "    ON CREATE SET sub.label = $sub_label, sub.created = datetime()"  # Don't re-set the label
                " MERGE (super:Class {uri: $super_uri})"                             # (TODO pending "update" timestamps)
                "    ON CREATE SET super.label = $super_label, super.created = datetime()"
                " MERGE (sub)-[relation:SUBCLASS]->(super)"
@@ -136,4 +139,9 @@ def _sparql_results(query: str) -> Dict:
                                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")
     sparql.setQuery(query)
     sparql.setReturnFormat(JSON)
-    return sparql.query().convert()
+    response = sparql.query()
+    try:
+        return response.convert()
+    except json.decoder.JSONDecodeError as e:
+        logger.debug(response)
+        raise e
