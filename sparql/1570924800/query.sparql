@@ -1,0 +1,9 @@
+SELECT DISTINCT ?item ?itemLabel (GROUP_CONCAT(?type;separator="||") AS ?types)
+WHERE {
+  ?item wdt:P31 ?type.
+  ?type wdt:P279* wd:Q7397.
+  SERVICE wikibase:label {
+    bd:serviceParam wikibase:language "en".
+  }
+}
+GROUP BY ?item ?itemLabel

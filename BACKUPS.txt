@@ -1,0 +1,11 @@
+# Soft backups are created with (Run as a Cypher query):
+CALL apoc.export.cypher.all("<filename>.cypher", {format: "cypher-shell"})
+# and will be located at <database directory>/imports/<filename>.cypher
+# and can be restored with
+cat <export file> > | ./bin/cypher-shell -u neo4j -p <password>
+
+# Hard backups are created with:
+./bin/neo4j-admin backup --backup-dir . --name
+# and will be located at <database directory>/<backup-dir>/<name>
+# and can be restored with
+./bin/neo4j-admin restore --from <backup file>
