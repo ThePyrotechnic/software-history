@@ -26,8 +26,10 @@ class Tasks:
         """
         with self.driver.session() as session:
             logger.info("Fetching current software URIs . . .")
-            current_software = session.run("MATCH (n:Software) RETURN n.uri AS uri, ID(n)").records()
-            current_software = set(software["uri"] for software in current_software)
+            current_software = session.run(
+                "MATCH (n:Software) RETURN n.uri AS uri, ID(n)").records()
+            current_software = set(software["uri"]
+                                   for software in current_software)
             logger.info("Complete")
 
         logger.info("Fetching current list of WikiData software . . .")
@@ -42,7 +44,8 @@ class Tasks:
             """)
         logger.info("Complete")
 
-        logger.info("Fetching current list of WikiData software subclasses . . .")
+        logger.info(
+            "Fetching current list of WikiData software subclasses . . .")
         wikidata_subclasses = _sparql_results(
             """SELECT DISTINCT ?class ?classLabel ?classParent ?classParentLabel WHERE {
                  ?class wdt:P279* wd:Q7397.
@@ -117,8 +120,10 @@ def add_parents(tx, class_: Dict, parents: List[Dict]):
     # TODO: Make this an unrolled query
     for parent in parents:
         tx.run("MERGE (sub:Class {uri: $sub_uri})"
-               "    ON CREATE SET sub.label = $sub_label, sub.created = datetime()"  # Don't re-set the label
-               " MERGE (super:Class {uri: $super_uri})"                             # (TODO pending "update" timestamps)
+               # Don't re-set the label
+               "    ON CREATE SET sub.label = $sub_label, sub.created = datetime()"
+               # (TODO pending "update" timestamps)
+               " MERGE (super:Class {uri: $super_uri})"
                "    ON CREATE SET super.label = $super_label, super.created = datetime()"
                " MERGE (sub)-[relation:SUBCLASS]->(super)"
                "    ON CREATE SET relation.created = datetime()",
@@ -151,7 +156,7 @@ def _sparql_results(query: str) -> Dict:
     """
     sparql = SPARQLWrapper("https://query.wikidata.org/sparql",
                            agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) "
-                                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")
+                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")
     sparql.setQuery(query)
     sparql.setReturnFormat(JSON)
     response = sparql.query()
