@@ -32,11 +32,22 @@ class Tasks:
         # i.e. "get all items related to software with exactly n depth"
         wikidata_software = _sparql_results(
             """SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {
-                  ?item wdt:P31 ?type.
-                  ?type (wdt:P279*) wd:Q7397.
-                  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+                 ?item wdt:P31 ?type.
+                 ?type (wdt:P279*) wd:Q7397.
+                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
                }
-              """)
+            """)
+        logger.info("Complete")
+
+        logger.info("Fetching current list of WikiData software subclasses . . .")
+        wikidata_subclasses = _sparql_results(
+            """SELECT DISTINCT ?class ?classLabel ?classParent ?classParentLabel WHERE {
+                 ?class wdt:P279* wd:Q7397.
+                 ?class wdt:P279 ?classParent .
+                 ?classParent wdt:P279* wd:Q7397.
+                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+               }
+            """)
         logger.info("Complete")
 
         visited = set()
@@ -100,6 +111,7 @@ def add_parents(tx, class_: Dict, parents: List[Dict]):
     :param class_: The subclass URI to draw the relations from
     :param parents: The superclass URIs to draw the relations to
     """
+    # TODO: Make this an unrolled query
     for parent in parents:
         tx.run("MERGE (sub:Class {uri: $sub_uri})"
                "    ON CREATE SET sub.label = $sub_label, sub.created = datetime()"  # Don't re-set the label
