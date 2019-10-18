@@ -19,12 +19,11 @@ class Tasks:
     def add_genre_to_videogames(self):
         pass
 
-    def update_database(self):
+    def get_software_instances(self) -> List[Dict[str, str]]:
         """
-        Add software which does not currently exist in the database. Create necessary superclass relations to support
-        new software nodes. Do not update existing nodes or relationships
+        Query wikidata for all instances of the software class at any depth.
+        :return: A list of dictionaries [{"software_uri": <software_uri>, ... }, ... ]
         """
-        logger.info("Fetching current list of WikiData software . . .")
         # Note: This query times out often. It may be possible to run this query in "rings"
         # i.e. "get all items related to software with exactly n depth"
         wikidata_software = _sparql_results(
@@ -32,59 +31,77 @@ class Tasks:
                  ?item wdt:P31 ?type.
                  ?type (wdt:P279*) wd:Q7397.
                  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-               }
-            """)
-        logger.info("Complete")
+               }""")
+        return [{'child_uri': software["item"]["value"],
+                 'child_label':software["itemLabel"]["value"],
+                 'parent_uri':software["type"]["value"],
+                 'parent_label':software["typeLabel"]["value"]}
+                for software in wikidata_software["results"]["bindings"]]
 
-        logger.info(
-            "Fetching current list of WikiData software subclasses . . .")
+    def get_software_subclasses(self) -> List[Dict[str, str]]:
+        """
+        Query wikidata for all subclasses of the software class at any depth.
+        :return: A list of dictionaries [{"sub_uri": <sub_uri>, "sub_label": <sub_label>, ... }, ... ]
+        """
         wikidata_subclasses = _sparql_results(
             """SELECT DISTINCT ?class ?classLabel ?classParent ?classParentLabel WHERE {
                  ?class wdt:P279* wd:Q7397.
                  ?class wdt:P279 ?classParent .
                  ?classParent wdt:P279* wd:Q7397.
                  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-               }
-            """)
+               }""")
+        return [{'child_uri': subclass["class"]["value"],
+                 'child_label':subclass["classLabel"]["value"],
+                 'parent_uri':subclass["classParent"]["value"],
+                 'parent_label':subclass["classParentLabel"]["value"]}
+                for subclass in wikidata_subclasses["results"]["bindings"]]
+
+    def generate_batches(self, data: List, batch_size: int) -> List:
+        """
+        Yield list of items of length batch_size for all items in data.
+        :param data: A list of dicts from SPARQL query return
+        :param batch_size: The size of each yielded batch of data elements
+        """
+        for i in range(0, len(data), batch_size):
+            yield data[i:i+batch_size]
+
+    def merge_data(self, session, data: List[Dict[str, str]],
+                   label: str, relationship: str, batch_size=500):
+        with self.driver.session() as session:
+            for i, batch in enumerate(self.generate_batches(data, batch_size)):
+                logger.info(f"Merging {relationship} relationship for {str(len(batch))} new {label} entries "
+                            f"({len(data) - (i * batch_size)} {label} entries remaining)")
+                session.run(f"""UNWIND $batch AS data
+                            MERGE (child:{label} {{uri: data.child_uri}})
+                                ON CREATE SET child.label = data.child_label, child.created = datetime()
+                            MERGE (parent:Class {{uri: data.parent_uri}})
+                                ON CREATE SET parent.label = data.parent_label, parent.created = datetime()
+                            MERGE (child)-[relation:{relationship}]->(parent)
+                                ON CREATE SET relation.created = datetime()
+                            """, batch=batch)
+                session.sync()
+            logger.info(f"Completed merge of {len(data)} {label} entries")
+
+    def update_database(self):
+        """
+        Add software which does not currently exist in the database. Create necessary superclass relations to support
+        new software nodes. Do not update existing nodes or relationships
+        """
+        # TODO: Implement set to prevent duplicate merges
+        # Will not only save time, but also potentially duplicate relations?
+        logger.info(
+            "Fetching current list of WikiData software subclasses . . .")
+        subclass_nodes = self.get_software_subclasses()
         logger.info("Complete")
 
-        software_map = [{'software_uri': software["item"]["value"],
-                         'software_label':software["itemLabel"]["value"],
-                         'super_uri':software["type"]["value"],
-                         'super_label':software["typeLabel"]["value"]}
-                        for software in wikidata_software["results"]["bindings"]]
-
-        subclass_map = [{'sub_uri': subclass["class"]["value"],
-                         'sub_label':subclass["classLabel"]["value"],
-                         'super_uri':subclass["classParent"]["value"],
-                         'super_label':subclass["classParentLabel"]["value"]}
-                        for subclass in wikidata_subclasses["results"]["bindings"]]
+        logger.info(
+            "Fetching current list of WikiData software . . .")
+        software_nodes = self.get_software_instances()
+        logger.info("Complete")
 
         with self.driver.session() as session:
-            logger.info("Merging fetched subclasses into database . . .")
-            session.run("""UNWIND $subclasses AS data
-                        MERGE (sub:Class {uri: data.sub_uri})
-                            ON CREATE SET sub.label = data.sub_label, sub.created = datetime()
-                        MERGE (super:Class {uri: data.super_uri})
-                            ON CREATE SET super.label = data.super_label, super.created = datetime()
-                         MERGE (sub)-[relation:SUBCLASS]->(super)
-                            ON CREATE SET relation.created = datetime()
-                        """, subclasses=subclass_map)
-            logger.info(str(session.sync()))
-            logger.info("Complete")
-
-            # Merge queries must be split into batches else memory usage becomes intractable
-            for batch in [software_map[i:i+1000] for i in range(0, len(software_map), 1000)]:
-                logger.info(
-                    "Merging fetched software batch into database . . .")
-                session.run("""UNWIND $softwares AS data
-                        MATCH (super:Class {uri: data.super_uri})
-                        MERGE (s:Software {uri: data.software_uri, label: data.software_label})
-                           ON CREATE SET s.created = datetime()
-                        CREATE (s)-[:INSTANCE {created: datetime()}]->(super)
-                        """, softwares=batch)
-                logger.info(str(session.sync()))
-                logger.info("Complete")
+            self.merge_data(session, subclass_nodes, "Class", "SUBCLASS")
+            self.merge_data(session, software_nodes, "Software", "INSTANCE")
 
             #        with self.driver.session() as session:
 #             for subclass in wikidata_subclasses["results"]["bindings"]:
