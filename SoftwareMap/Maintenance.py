@@ -19,6 +19,91 @@ class Tasks:
     def add_genre_to_videogames(self):
         pass
 
+    def update_database(self):
+        """
+        Add software which does not currently exist in the database. Create necessary superclass relations to support
+        new software nodes. Do not update existing nodes or relationships
+        """
+        logger.info("Fetching current list of WikiData software . . .")
+        # Note: This query times out often. It may be possible to run this query in "rings"
+        # i.e. "get all items related to software with exactly n depth"
+        wikidata_software = _sparql_results(
+            """SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {
+                 ?item wdt:P31 ?type.
+                 ?type (wdt:P279*) wd:Q7397.
+                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+               }
+            """)
+        logger.info("Complete")
+
+        logger.info(
+            "Fetching current list of WikiData software subclasses . . .")
+        wikidata_subclasses = _sparql_results(
+            """SELECT DISTINCT ?class ?classLabel ?classParent ?classParentLabel WHERE {
+                 ?class wdt:P279* wd:Q7397.
+                 ?class wdt:P279 ?classParent .
+                 ?classParent wdt:P279* wd:Q7397.
+                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+               }
+            """)
+        logger.info("Complete")
+
+        software_map = [{'software_uri': software["item"]["value"],
+                         'software_label':software["itemLabel"]["value"],
+                         'super_uri':software["type"]["value"],
+                         'super_label':software["typeLabel"]["value"]}
+                        for software in wikidata_software["results"]["bindings"]]
+
+        subclass_map = [{'sub_uri': subclass["class"]["value"],
+                         'sub_label':subclass["classLabel"]["value"],
+                         'super_uri':subclass["classParent"]["value"],
+                         'super_label':subclass["classParentLabel"]["value"]}
+                        for subclass in wikidata_subclasses["results"]["bindings"]]
+
+        with self.driver.session() as session:
+            logger.info("Merging fetched subclasses into database . . .")
+            session.run("""UNWIND $subclasses AS data
+                        MERGE (sub:Class {uri: data.sub_uri})
+                            ON CREATE SET sub.label = data.sub_label, sub.created = datetime()
+                        MERGE (super:Class {uri: data.super_uri})
+                            ON CREATE SET super.label = data.super_label, super.created = datetime()
+                         MERGE (sub)-[relation:SUBCLASS]->(super)
+                            ON CREATE SET relation.created = datetime()
+                        """, subclasses=subclass_map)
+            logger.info(str(session.sync()))
+            logger.info("Complete")
+
+            # Merge queries must be split into batches else memory usage becomes intractable
+            for batch in [software_map[i:i+1000] for i in range(0, len(software_map), 1000)]:
+                logger.info(
+                    "Merging fetched software batch into database . . .")
+                session.run("""UNWIND $softwares AS data
+                        MATCH (super:Class {uri: data.super_uri})
+                        MERGE (s:Software {uri: data.software_uri, label: data.software_label})
+                           ON CREATE SET s.created = datetime()
+                        CREATE (s)-[:INSTANCE {created: datetime()}]->(super)
+                        """, softwares=batch)
+                logger.info(str(session.sync()))
+                logger.info("Complete")
+
+            #        with self.driver.session() as session:
+#             for subclass in wikidata_subclasses["results"]["bindings"]:
+#                 session.run("MERGE (sub:Class {uri: $sub_uri})"
+#                             "    ON CREATE SET sub.label = $sub_label, sub.created = datetime()"
+# n                            " MERGE (super:Class {uri: $super_uri})"
+#                             "    ON CREATE SET super.label = $super_label, super.created = datetime()"
+#                             " MERGE (sub)-[relation:SUBCLASS]->(super)"
+#                             "    ON CREATE SET relation.created = datetime()",
+#                             sub_uri=subclass["class"]["value"], sub_label=subclass["classLabel"]["value"],
+#                             super_uri=subclass["classParent"]["value"], super_label=subclass["classParentLabel"]["value"])
+#             for software in wikidata_software["results"]["bindings"]:
+#                 session.run("MATCH (super:Class {uri: $super_uri})"
+#                             "MERGE (s:Software {uri: $software_uri, label: $software_label})"
+#                             "   ON CREATE SET s.created = datetime()"
+#                             "CREATE (s)-[:INSTANCE {created: datetime()}]->(super)",
+#                             software_uri=software["item"]["value"], software_label=software["itemLabel"]["value"],
+#                             super_uri=software["type"]["value"], super_label=software["typeLabel"]["value"])
+
     def add_new_software(self):
         """
         Add software which does not currently exist in the database. Create necessary superclass relations to support
