@@ -16,6 +16,9 @@ class Tasks:
         self.driver = GraphDatabase.driver(server, auth=auth)
         logger.info("Connection complete")
 
+    def add_genre_to_videogames(self):
+        pass
+
     def add_new_software(self):
         """
         Add software which does not currently exist in the database. Create necessary superclass relations to support
