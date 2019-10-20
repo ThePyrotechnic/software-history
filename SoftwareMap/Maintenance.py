@@ -1,3 +1,4 @@
+import time
 import json
 import logging
 from typing import Dict, List, Tuple
@@ -55,7 +56,7 @@ class Tasks:
         :param batch_size: Size of batches to send data to neo4j, default 500
         """
         with self.driver.session() as session:
-            for i, batch in enumerate(self._generate_batches(data, batch_size)):
+            for i, batch in enumerate(_generate_batches(data, batch_size)):
                 logger.info(
                     f"Merging {relationship} relationship for {str(len(batch))} new {db_label} entries "
                     f"({len(data) - (i * batch_size)} {db_label} entries remaining)"
@@ -76,7 +77,7 @@ class Tasks:
             logger.info(f"Completed merge of {len(data)} {db_label} entries")
 
     @staticmethod
-    def _get_software_instances() -> List[Dict[str, str]]:
+    def _get_software_instances(batch_size: int = 200) -> List[Dict[str, str]]:
         """
         Query wikidata for all instances of the software class at any depth.
         :return: A list of dictionaries [{"software_uri": <software_uri>, ... }, ... ]
@@ -84,12 +85,29 @@ class Tasks:
         # Note: This query times out often. It may be possible to run this query in "rings"
         # i.e. "get all items related to software with exactly n depth"
         wikidata_software = _sparql_results(
-            """SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {
+            """SELECT DISTINCT ?item WHERE {
                  ?item wdt:P31 ?type.
                  ?type (wdt:P279*) wd:Q7397.
-                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
                }"""
         )
+        logger.info("Fetched software uris, fetching labels")
+        labelled_software = []
+        for i, software_batch in enumerate(_generate_batches(wikidata_software["results"]["bindings"], batch_size)):
+            software_uris = ""
+            for software in software_batch:
+                uri_code = software['item']['value'].split('/')[-1]
+                software_uris = software_uris + f" (wd:{uri_code})"
+            label_return = _sparql_results("""
+                     SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {{
+                     VALUES (?item) {{ {software_uris} }}
+                     ?item wdt:P31 ?type
+                     SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+                }}""".format(software_uris=software_uris)
+            )
+
+            logger.info(f"Fetched {len(software_batch)} software labels ({len(wikidata_software['results']['bindings']) - (i * batch_size)} instances remaining)")
+            labelled_software.extend(label_return["results"]["bindings"])
+
         return [
             {
                 "child_uri": software["item"]["value"],
@@ -97,7 +115,7 @@ class Tasks:
                 "parent_uri": software["type"]["value"],
                 "parent_label": software["typeLabel"]["value"],
             }
-            for software in wikidata_software["results"]["bindings"]
+            for software in labelled_software
         ]
 
     @staticmethod
@@ -124,16 +142,6 @@ class Tasks:
             for subclass in wikidata_subclasses["results"]["bindings"]
         ]
 
-    @staticmethod
-    def _generate_batches(data: List, batch_size: int) -> List:
-        """
-        Yield list of items of length batch_size for all items in data.
-        :param data: A list of dicts from SPARQL query return
-        :param batch_size: The size of each yielded batch of data elements
-        """
-        for i in range(0, len(data), batch_size):
-            yield data[i: i + batch_size]
-
 
 def _sparql_results(query: str) -> Dict:
     """
@@ -152,3 +160,13 @@ def _sparql_results(query: str) -> Dict:
     except json.decoder.JSONDecodeError as e:
         logger.debug(response)
         raise e
+
+
+def _generate_batches(data: List, batch_size: int) -> List:
+    """
+    Yield list of items of length batch_size for all items in data.
+    :param data: A list of dicts from SPARQL query return
+    :param batch_size: The size of each yielded batch of data elements
+    """
+    for i in range(0, len(data), batch_size):
+        yield data[i: i + batch_size]
