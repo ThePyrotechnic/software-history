@@ -1,3 +1,4 @@
+import math
 import time
 import json
 import logging
@@ -39,7 +40,7 @@ class Tasks:
         class_nodes = [node for node in class_nodes if node["child_uri"] not in current_classes]
         logger.info("Complete")
 
-        logger.info("Fetching current list of WikiData software . . .")
+        logger.info("Fetching current list of WikiData software instances . . .")
         software_nodes = self._get_software_instances()
         software_nodes = [node for node in software_nodes if node["child_uri"] not in current_software]
         logger.info("Complete")
@@ -74,40 +75,39 @@ class Tasks:
                 )
                 # Sync statement prevents lazy return of query response, blocks until completion
                 session.sync()
-            logger.info(f"Completed merge of {len(data)} {db_label} entries")
+            logger.info(f"Completed merge of {len(data)} new {db_label} entries")
 
     @staticmethod
-    def _get_software_instances(batch_size: int = 200) -> List[Dict[str, str]]:
+    def _get_software_instances(batch_size: int = 30) -> List[Dict[str, str]]:
         """
         Query wikidata for all instances of the software class at any depth.
         :return: A list of dictionaries [{"software_uri": <software_uri>, ... }, ... ]
         """
-        # Note: This query times out often. It may be possible to run this query in "rings"
-        # i.e. "get all items related to software with exactly n depth"
-        wikidata_software = _sparql_results(
-            """SELECT DISTINCT ?item WHERE {
+        wikidata_base_classes = _sparql_results(
+            """SELECT DISTINCT ?type WHERE {
                  ?item wdt:P31 ?type.
                  ?type (wdt:P279*) wd:Q7397.
                }"""
         )
-        logger.info("Fetched software uris, fetching labels")
-        labelled_software = []
-        for i, software_batch in enumerate(_generate_batches(wikidata_software["results"]["bindings"], batch_size)):
-            software_uris = ""
-            for software in software_batch:
-                uri_code = software['item']['value'].split('/')[-1]
-                software_uris = software_uris + f" (wd:{uri_code})"
-            label_return = _sparql_results("""
+        wikidata_software = []
+        for i, class_batch in enumerate(_generate_batches(wikidata_base_classes["results"]["bindings"], batch_size)):
+            logger.info(f"Fetching software batch: [{i+1}/"
+                        f"{math.ceil(len(wikidata_base_classes['results']['bindings'])/batch_size)}]")
+            # Get base class qids as a list of format ["(wd:{qid})", ...] for batch queries
+            base_class_qids = ' '.join(["(wd:%s)" % base_class['type']['value'].split('/')[-1]
+                                        for base_class in class_batch])
+            software_batch = _sparql_results("""
                      SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {{
-                     VALUES (?item) {{ {software_uris} }}
-                     ?item wdt:P31 ?type
+                     VALUES (?type) {{ {base_class_qids} }}.
+                     ?item wdt:P31 ?type.
                      SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
-                }}""".format(software_uris=software_uris)
+                }}""".format(base_class_qids=base_class_qids)
             )
-
-            logger.info(f"Fetched {len(software_batch)} software labels ({len(wikidata_software['results']['bindings']) - (i * batch_size)} instances remaining)")
-            labelled_software.extend(label_return["results"]["bindings"])
-
+            logger.debug(f"Fetched {len(software_batch['results']['bindings'])} software labels "
+                         f"from {len(class_batch)} base classes "
+                         f"({len(wikidata_base_classes['results']['bindings']) - (i * batch_size)} "
+                         f"classes remaining)")
+            wikidata_software.extend(software_batch["results"]["bindings"])
         return [
             {
                 "child_uri": software["item"]["value"],
@@ -115,7 +115,7 @@ class Tasks:
                 "parent_uri": software["type"]["value"],
                 "parent_label": software["typeLabel"]["value"],
             }
-            for software in labelled_software
+            for software in wikidata_software
         ]
 
     @staticmethod
