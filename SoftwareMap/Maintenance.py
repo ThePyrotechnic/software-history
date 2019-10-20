@@ -17,7 +17,35 @@ class Tasks:
         logger.info("Connection complete")
 
     def add_genre_to_videogames(self):
-        pass
+        logger.info('Fetching current instances of "video game" with genre . . .')
+        wikidata_query = _sparql_results("""
+            SELECT DISTINCT ?item ?genre ?genreLabel WHERE {
+                ?item wdt:P31/wdt:P279* wd:Q7889;
+                    wdt:P136 ?genre
+                SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+            }
+        """)
+        wikidata_games = [{
+            "game_uri": game["item"]["value"],
+            "genre_uri": game["genre"]["value"],
+            "genre_label": game["genreLabel"]["value"]
+        } for game in wikidata_query["results"]["bindings"]]
+        logger.info("Complete")
+
+        logger.info('Adding genre labels to existing games . . .')
+        with self.driver.session() as session:
+            query = session.run("""
+                UNWIND $games as game
+                    MATCH (v:Software {uri: game.game_uri})
+                    MERGE (g:Genre {uri: game.genre_uri})
+                        ON CREATE SET g.label = game.genre_label, g.created = datetime()
+                    MERGE (v)-[m:MEMBER]->(g)
+                        ON CREATE SET m.created = datetime()
+            """, games=wikidata_games)
+            result = query.consume()
+            nodes_created = result['counters']['nodes_created']
+            relationships_created = result['counters']['relationships_created']
+            logger.info(f"Complete. Created {nodes_created} nodes, {relationships_created} relationships")
 
     def update_software_and_classes(self):
         """
@@ -151,7 +179,7 @@ def _sparql_results(query: str) -> Dict:
     """
     sparql = SPARQLWrapper("https://query.wikidata.org/sparql",
                            agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")
+                                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36")
     sparql.setQuery(query)
     sparql.setReturnFormat(JSON)
     response = sparql.query()
