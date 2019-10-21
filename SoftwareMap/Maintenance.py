@@ -49,8 +49,8 @@ class Tasks:
                         ON CREATE SET m.created = datetime()
             """, games=wikidata_games)
             result = query.consume()
-            nodes_created = result['counters']['nodes_created']
-            relationships_created = result['counters']['relationships_created']
+            nodes_created = result.counters.nodes_created
+            relationships_created = result.counters.relationships_created
             logger.info(f"Complete. Created {nodes_created} nodes, {relationships_created} relationships")
 
     def update_software_and_classes(self):
