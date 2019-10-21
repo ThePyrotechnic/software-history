@@ -71,7 +71,7 @@ class Tasks:
         # datetime.fromisoformat(str) function from Python 3.7 can likely do it, but I'm on 3.6
         wikidata_results = [{
             "software_uri": software["item"]["value"],
-            "inception_date": datetime.strptime(software["inception"]["value"], "%Y-%m-%dT%H:%M:%SZ")
+            "inception_date": datetime.strptime(software["inception"]["value"].split("T")[0], "%Y-%m-%d").date()
         } for software in wikidata_query["results"]["bindings"]]
         logger.info("Complete")
 
