@@ -91,24 +91,20 @@ class Tasks:
         :param batch_size: Size of batches to send data to neo4j, default 500
         """
         with self.driver.session() as session:
-            for i, batch in enumerate(_generate_batches(data, batch_size)):
-                logger.info(
-                    f"Merging {relationship} relationship for {str(len(batch))} new {db_label} entries "
-                    f"({len(data) - (i * batch_size)} {db_label} entries remaining)"
-                )
-                session.run(
-                    f"""UNWIND $batch AS data
-                            MERGE(child: {db_label} {{uri: data.child_uri}})
-                                ON CREATE SET child.label = data.child_label, child.created = datetime()
-                            MERGE(parent: Class {{uri: data.parent_uri}})
-                                ON CREATE SET parent.label = data.parent_label, parent.created = datetime()
-                            MERGE(child)-[relation: {relationship}] -> (parent)
-                                ON CREATE SET relation.created = datetime()
-                            """,
-                    batch=batch,
-                )
-                # Sync statement prevents lazy return of query response, blocks until completion
-                session.sync()
+            logger.info(f"Merging {relationship} relationship for {len(data)} new {db_label} entries")
+            session.run(
+                f"""UNWIND $batch AS data
+                    MERGE(child: {db_label} {{uri: data.child_uri}})
+                        ON CREATE SET child.label = data.child_label, child.created = datetime()
+                    MERGE(parent: Class {{uri: data.parent_uri}})
+                        ON CREATE SET parent.label = data.parent_label, parent.created = datetime()
+                    MERGE(child)-[relation: {relationship}] -> (parent)
+                        ON CREATE SET relation.created = datetime()
+                """,
+                batch=data,
+            )
+            # Sync statement prevents lazy return of query response, blocks until completion
+            session.sync()
             logger.info(f"Completed merge of {len(data)} new {db_label} entries")
 
     @staticmethod
