@@ -15,6 +15,12 @@ class Tasks:
         logger.info("Connecting to database . . .")
         self.driver = GraphDatabase.driver(server, auth=auth)
         logger.info("Connection complete")
+        logger.info("Apply uniqueness constraints to database . . .")
+        with self.driver.session() as session:
+            session.run("CREATE CONSTRAINT ON (node:Class) ASSERT (node.uri) IS UNIQUE")
+            session.run("CREATE CONSTRAINT ON (node:Software) ASSERT (node.uri) IS UNIQUE")
+            session.run("CREATE CONSTRAINT ON (node:Genre) ASSERT (node.uri) IS UNIQUE")
+        logger.info("Complete")
 
     def add_genre_to_videogames(self):
         logger.info('Fetching current instances of "video game" with genre . . .')
