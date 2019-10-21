@@ -3,6 +3,7 @@ import time
 import json
 import logging
 from random import shuffle
+from datetime import datetime
 from typing import Dict, List, Tuple
 
 from neo4j import GraphDatabase
@@ -53,6 +54,37 @@ class Tasks:
             nodes_created = result.counters.nodes_created
             relationships_created = result.counters.relationships_created
             logger.info(f"Complete. Created {nodes_created} nodes, {relationships_created} relationships")
+
+    def add_date_of_inception(self):
+        """
+        Add inception date property to nodes that currently lack it
+        """
+        logger.info("Fetching current instances of all software with inception date . . .")
+        wikidata_query = _sparql_results("""
+            SELECT ?item ?itemLabel ?inception WHERE {
+              ?item wdt:P31/wdt:279* wd:Q7397.
+              ?item wdt:P571 ?inception.
+              SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+            }
+        """)
+        # NOTE: String ISO time format from WikiData not fully parsed here, Zulu time zone information lost
+        # datetime.fromisoformat(str) function from Python 3.7 can likely do it, but I'm on 3.6
+        wikidata_results = [{
+            "software_uri": software["item"]["value"],
+            "inception_date": datetime.strptime(software["inception"]["value"], "%Y-%m-%dT%H:%M:%SZ")
+        } for software in wikidata_query["results"]["bindings"]]
+        logger.info("Complete")
+
+        logger.info(f"Adding {len(wikidata_results)} inception dates to existing software . . .")
+        with self.driver.session() as session:
+            query = session.run("""
+                UNWIND $software as software
+                    MATCH (s:Software {uri: software.software_uri}) WHERE NOT EXISTS(s.inception)
+                    SET s.inception = software.inception_date
+            """, software=wikidata_results)
+            result = query.consume()
+            properties_set = result.counters.properties_set
+            logger.info(f"Complete. Set {properties_set} properties")
 
     def update_software_and_classes(self):
         """
