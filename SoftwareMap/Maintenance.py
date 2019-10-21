@@ -39,7 +39,7 @@ class Tasks:
         } for game in wikidata_query["results"]["bindings"]]
         logger.info("Complete")
 
-        logger.info('Adding genre labels to existing games . . .')
+        logger.info(f'Adding {len(wikidata_games)} genre labels to existing games . . .')
         with self.driver.session() as session:
             query = session.run("""
                 UNWIND $games as game
@@ -78,7 +78,6 @@ class Tasks:
         logger.info("Fetching current list of WikiData software instances . . .")
         software_nodes = self._get_software_instances()
         software_nodes = [node for node in software_nodes if node["child_uri"] not in current_software]
-        logger.info("Complete")
 
         self._merge_data(class_nodes, "Class", "SUBCLASS")
         self._merge_data(software_nodes, "Software", "INSTANCE")
