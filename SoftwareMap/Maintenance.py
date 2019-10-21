@@ -2,6 +2,7 @@ import math
 import time
 import json
 import logging
+from random import shuffle
 from typing import Dict, List, Tuple
 
 from neo4j import GraphDatabase
@@ -117,8 +118,10 @@ class Tasks:
             """SELECT DISTINCT ?type WHERE {
                  ?item wdt:P31 ?type.
                  ?type (wdt:P279*) wd:Q7397.
-               }"""
+               } ORDER BY (?type)"""
         )
+        # Shuffle query batch items to prevent WikiData caching of failed queries
+        shuffle(wikidata_base_classes["results"]["bindings"])
         wikidata_software = []
         for i, class_batch in enumerate(_generate_batches(wikidata_base_classes["results"]["bindings"], batch_size)):
             logger.info(f"Fetching software batch: [{i+1}/"
