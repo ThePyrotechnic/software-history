@@ -1,5 +1,8 @@
+import math
+import time
 import json
 import logging
+from random import shuffle
 from typing import Dict, List, Tuple
 
 from neo4j import GraphDatabase
@@ -13,6 +16,12 @@ class Tasks:
         logger.info("Connecting to database . . .")
         self.driver = GraphDatabase.driver(server, auth=auth)
         logger.info("Connection complete")
+        logger.info("Apply uniqueness constraints to database . . .")
+        with self.driver.session() as session:
+            session.run("CREATE CONSTRAINT ON (node:Class) ASSERT (node.uri) IS UNIQUE")
+            session.run("CREATE CONSTRAINT ON (node:Software) ASSERT (node.uri) IS UNIQUE")
+            session.run("CREATE CONSTRAINT ON (node:Genre) ASSERT (node.uri) IS UNIQUE")
+        logger.info("Complete")
 
     def add_genre_to_videogames(self):
         logger.info('Fetching current instances of "video game" with genre . . .')
@@ -30,7 +39,7 @@ class Tasks:
         } for game in wikidata_query["results"]["bindings"]]
         logger.info("Complete")
 
-        logger.info('Adding genre labels to existing games . . .')
+        logger.info(f'Adding {len(wikidata_games)} genre labels to existing games . . .')
         with self.driver.session() as session:
             query = session.run("""
                 UNWIND $games as game
@@ -41,8 +50,8 @@ class Tasks:
                         ON CREATE SET m.created = datetime()
             """, games=wikidata_games)
             result = query.consume()
-            nodes_created = result['counters']['nodes_created']
-            relationships_created = result['counters']['relationships_created']
+            nodes_created = result.counters.nodes_created
+            relationships_created = result.counters.relationships_created
             logger.info(f"Complete. Created {nodes_created} nodes, {relationships_created} relationships")
 
     def update_software_and_classes(self):
@@ -66,10 +75,9 @@ class Tasks:
         class_nodes = [node for node in class_nodes if node["child_uri"] not in current_classes]
         logger.info("Complete")
 
-        logger.info("Fetching current list of WikiData software . . .")
+        logger.info("Fetching current list of WikiData software instances . . .")
         software_nodes = self._get_software_instances()
         software_nodes = [node for node in software_nodes if node["child_uri"] not in current_software]
-        logger.info("Complete")
 
         self._merge_data(class_nodes, "Class", "SUBCLASS")
         self._merge_data(software_nodes, "Software", "INSTANCE")
@@ -83,41 +91,55 @@ class Tasks:
         :param batch_size: Size of batches to send data to neo4j, default 500
         """
         with self.driver.session() as session:
-            for i, batch in enumerate(self._generate_batches(data, batch_size)):
-                logger.info(
-                    f"Merging {relationship} relationship for {str(len(batch))} new {db_label} entries "
-                    f"({len(data) - (i * batch_size)} {db_label} entries remaining)"
-                )
-                session.run(
-                    f"""UNWIND $batch AS data
-                            MERGE(child: {db_label} {{uri: data.child_uri}})
-                                ON CREATE SET child.label = data.child_label, child.created = datetime()
-                            MERGE(parent: Class {{uri: data.parent_uri}})
-                                ON CREATE SET parent.label = data.parent_label, parent.created = datetime()
-                            MERGE(child)-[relation: {relationship}] -> (parent)
-                                ON CREATE SET relation.created = datetime()
-                            """,
-                    batch=batch,
-                )
-                # Sync statement prevents lazy return of query response, blocks until completion
-                session.sync()
-            logger.info(f"Completed merge of {len(data)} {db_label} entries")
+            logger.info(f"Merging {relationship} relationship for {len(data)} new {db_label} entries")
+            session.run(
+                f"""UNWIND $batch AS data
+                    MERGE(child: {db_label} {{uri: data.child_uri}})
+                        ON CREATE SET child.label = data.child_label, child.created = datetime()
+                    MERGE(parent: Class {{uri: data.parent_uri}})
+                        ON CREATE SET parent.label = data.parent_label, parent.created = datetime()
+                    MERGE(child)-[relation: {relationship}] -> (parent)
+                        ON CREATE SET relation.created = datetime()
+                """,
+                batch=data,
+            )
+            # Sync statement prevents lazy return of query response, blocks until completion
+            session.sync()
+            logger.info(f"Completed merge of {len(data)} new {db_label} entries")
 
     @staticmethod
-    def _get_software_instances() -> List[Dict[str, str]]:
+    def _get_software_instances(batch_size: int = 30) -> List[Dict[str, str]]:
         """
         Query wikidata for all instances of the software class at any depth.
         :return: A list of dictionaries [{"software_uri": <software_uri>, ... }, ... ]
         """
-        # Note: This query times out often. It may be possible to run this query in "rings"
-        # i.e. "get all items related to software with exactly n depth"
-        wikidata_software = _sparql_results(
-            """SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {
+        wikidata_base_classes = _sparql_results(
+            """SELECT DISTINCT ?type WHERE {
                  ?item wdt:P31 ?type.
                  ?type (wdt:P279*) wd:Q7397.
-                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-               }"""
+               } ORDER BY (?type)"""
         )
+        # Shuffle query batch items to prevent WikiData caching of failed queries
+        shuffle(wikidata_base_classes["results"]["bindings"])
+        wikidata_software = []
+        for i, class_batch in enumerate(_generate_batches(wikidata_base_classes["results"]["bindings"], batch_size)):
+            logger.info(f"Fetching software batch: [{i+1}/"
+                        f"{math.ceil(len(wikidata_base_classes['results']['bindings'])/batch_size)}]")
+            # Get base class qids as a list of format ["(wd:{qid})", ...] for batch queries
+            base_class_qids = ' '.join(["(wd:%s)" % base_class['type']['value'].split('/')[-1]
+                                        for base_class in class_batch])
+            software_batch = _sparql_results("""
+                     SELECT DISTINCT ?item ?itemLabel ?type ?typeLabel WHERE {{
+                     VALUES (?type) {{ {base_class_qids} }}.
+                     ?item wdt:P31 ?type.
+                     SERVICE wikibase:label {{ bd:serviceParam wikibase:language "en". }}
+                }}""".format(base_class_qids=base_class_qids)
+            )
+            logger.debug(f"Fetched {len(software_batch['results']['bindings'])} software labels "
+                         f"from {len(class_batch)} base classes "
+                         f"({len(wikidata_base_classes['results']['bindings']) - (i * batch_size)} "
+                         f"classes remaining)")
+            wikidata_software.extend(software_batch["results"]["bindings"])
         return [
             {
                 "child_uri": software["item"]["value"],
@@ -125,7 +147,7 @@ class Tasks:
                 "parent_uri": software["type"]["value"],
                 "parent_label": software["typeLabel"]["value"],
             }
-            for software in wikidata_software["results"]["bindings"]
+            for software in wikidata_software
         ]
 
     @staticmethod
@@ -152,16 +174,6 @@ class Tasks:
             for subclass in wikidata_subclasses["results"]["bindings"]
         ]
 
-    @staticmethod
-    def _generate_batches(data: List, batch_size: int) -> List:
-        """
-        Yield list of items of length batch_size for all items in data.
-        :param data: A list of dicts from SPARQL query return
-        :param batch_size: The size of each yielded batch of data elements
-        """
-        for i in range(0, len(data), batch_size):
-            yield data[i: i + batch_size]
-
 
 def _sparql_results(query: str) -> Dict:
     """
@@ -180,3 +192,13 @@ def _sparql_results(query: str) -> Dict:
     except json.decoder.JSONDecodeError as e:
         logger.debug(response)
         raise e
+
+
+def _generate_batches(data: List, batch_size: int) -> List:
+    """
+    Yield list of items of length batch_size for all items in data.
+    :param data: A list of dicts from SPARQL query return
+    :param batch_size: The size of each yielded batch of data elements
+    """
+    for i in range(0, len(data), batch_size):
+        yield data[i: i + batch_size]
