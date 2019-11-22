@@ -1,5 +1,9 @@
 .idea
 
+# Org-mode output files
+*.pdf
+*.tex
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

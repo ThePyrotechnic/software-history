@@ -1,4 +1,0 @@
-For maintainability:
- - Create a library which contains maintenance functions
-  - Check for and add new instances of software (daily etc.)
-  - Add properties to existing nodes

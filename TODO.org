@@ -1,0 +1,53 @@
+#+TITLE: History of Software TODO
+
+
+
+For maintainability:
+ - Create a library which contains maintenance functions
+  - Check for and add new instances of software (daily etc.)
+  - Add properties to existing nodes
+* TODO "Curated" database property
+- Will allow for manually curated nodes to be enabled or disabled in final representation
+* TODO "Blurb" database property [0%]
+** TODO Manual Entry
+- Manually enter blurb about designated software node and populate database manually for node of interest
+** TODO Scrape Wikipedia
+- Scrape Wikipedia using [[https://www.mediawiki.org/wiki/API:Main_page][MediaWiki web API]]
+- Scrape Wikidata via description field
+  - Usually too brief
+  - Example query:
+#+begin_src sparql
+SELECT DISTINCT ?item ?itemDescription WHERE {
+       ?item wdt:P31/wdt:P279* wd:Q7889.
+       ?item schema:description ?itemDescription.
+       FILTER(LANG(?itemDescription) = "en").
+}
+#+end_src
+
+* DONE Add density to date properties
+** Thoughts
+- Currenly only use "date of inception" (P571)
+- Should check additional date metrics:
+  - inception date: P571
+    - 130 results
+  - point in time: P585
+    - 80 results
+  - publication date: P577
+    - 33306 results
+  - earliest date: P1319
+    - 0 results
+  - latest date: P1326
+    - 0 results
+  - production date: P2754
+    - 2 results
+  - start time: P580
+    - 21 results
+  - date of the first one: P7124
+    - 0 results
+  - date of commercializtion: P5204
+    - 0 results
+** Result
+- Replace sparse inception date (P571) property with publication date property (P577), which returns over 30000 results
+** Additional Work
+- May be useful to fuse with other date properties, but their small size (order of tens to hundreds) per property give this little major outcome on the data
+
