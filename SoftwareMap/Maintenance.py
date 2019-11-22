@@ -60,9 +60,10 @@ class Tasks:
         """
         logger.info("Fetching current instances of all software with release date . . .")
         wikidata_query = _sparql_results("""
-            SELECT DISTINCT ?item ?release WHERE {
+            SELECT DISTINCT ?item ?published ?inception WHERE {
                 ?item wdt:P31/wdt:P279* wd:Q7397.
-                ?item wdt:P577 ?release.
+                OPTIONAL{?item wdt:P571 ?inception}.
+                OPTIONAL{?item wdt:P577 ?published}.
                 SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
             }
         """)
@@ -70,8 +71,8 @@ class Tasks:
         # datetime.fromisoformat(str) function from Python 3.7 can likely do it, but I'm on 3.6
         wikidata_results = [{
             "software_uri": software["item"]["value"],
-            "release_date": _strip_timestamp(software["release"]["value"])
-        } for software in wikidata_query["results"]["bindings"]]
+            "release_date": _strip_timestamp(_get_best_date(software))
+        } for software in wikidata_query["results"]["bindings"] if _get_best_date(software) is not None]
         logger.info("Complete")
 
         logger.info(f"Adding {len(wikidata_results)} release dates to existing software . . .")
@@ -255,3 +256,13 @@ def _strip_timestamp(timestamp: str) -> datetime:
         except ValueError as e:
             logger.error(f"%Y-%m-%d Time Parsing Error: {e}")
             return None
+
+def _get_best_date(software: Dict) -> str:
+    """
+    Return string date for first matched date in software return
+    """
+    if "published" in software:
+        return software["published"]["value"]
+    if "inception" in software:
+        return software["inception"]["value"]
+    return None
