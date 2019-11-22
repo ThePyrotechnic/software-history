@@ -54,32 +54,32 @@ class Tasks:
             relationships_created = result.counters.relationships_created
             logger.info(f"Complete. Created {nodes_created} nodes, {relationships_created} relationships")
 
-    def add_date_of_inception(self):
+    def add_date_of_release(self):
         """
-        Add inception date property to nodes that currently lack it
+        Add release date property to nodes that currently lack it
         """
-        logger.info("Fetching current instances of all software with inception date . . .")
+        logger.info("Fetching current instances of all software with release date . . .")
         wikidata_query = _sparql_results("""
-            SELECT ?item ?itemLabel ?inception WHERE {
-              ?item wdt:P31/wdt:279* wd:Q7397.
-              ?item wdt:P571 ?inception.
-              SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+            SELECT DISTINCT ?item ?release WHERE {
+                ?item wdt:P31/wdt:P279* wd:Q7397.
+                ?item wdt:P577 ?release.
+                SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
             }
         """)
         # NOTE: String ISO time format from WikiData not fully parsed here, Zulu time zone information lost
         # datetime.fromisoformat(str) function from Python 3.7 can likely do it, but I'm on 3.6
         wikidata_results = [{
             "software_uri": software["item"]["value"],
-            "inception_date": datetime.strptime(software["inception"]["value"].split("T")[0], "%Y-%m-%d").date()
+            "release_date": _strip_timestamp(software["release"]["value"])
         } for software in wikidata_query["results"]["bindings"]]
         logger.info("Complete")
 
-        logger.info(f"Adding {len(wikidata_results)} inception dates to existing software . . .")
+        logger.info(f"Adding {len(wikidata_results)} release dates to existing software . . .")
         with self.driver.session() as session:
             query = session.run("""
                 UNWIND $software as software
-                    MATCH (s:Software {uri: software.software_uri}) WHERE NOT EXISTS(s.inception)
-                    SET s.inception = software.inception_date
+                    MATCH (s:Software {uri: software.software_uri}) WHERE NOT EXISTS(s.release)
+                    SET s.release = software.release_date
             """, software=wikidata_results)
             result = query.consume()
             properties_set = result.counters.properties_set
@@ -233,3 +233,25 @@ def _generate_batches(data: List, batch_size: int) -> List:
     """
     for i in range(0, len(data), batch_size):
         yield data[i: i + batch_size]
+
+
+def _strip_timestamp(timestamp: str) -> datetime:
+    """
+    Return date object stripped from string timestamp
+    :param timestamp: A string timestamp in %Y-%m-%d or Unix time format
+    """
+    if not timestamp:
+        logger.error(f"Timestamp string is empty")
+        return None
+    if timestamp[0] == "t":
+        try:
+            return datetime.utcfromtimestamp(int(timestamp.split("t")[1])).date()
+        except ValueError as e:
+            logger.error(f"UTC Time Parsing Error: {e}")
+            return None
+    else:
+        try:
+            return datetime.strptime(timestamp.split("T")[0], "%Y-%m-%d").date()
+        except ValueError as e:
+            logger.error(f"%Y-%m-%d Time Parsing Error: {e}")
+            return None
