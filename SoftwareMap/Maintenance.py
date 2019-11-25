@@ -8,6 +8,8 @@ from typing import Dict, List, Tuple
 from neo4j import GraphDatabase
 from SPARQLWrapper import SPARQLWrapper, JSON
 
+from pywikiapi import wikipedia
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,6 +87,54 @@ class Tasks:
             result = query.consume()
             properties_set = result.counters.properties_set
             logger.info(f"Complete. Set {properties_set} properties")
+
+    def add_wikipedia_summary(self):
+        """
+        Add wikipedia summary to nodes that currently lack it
+        """
+        logger.info("Fetching instances of all software with wikipedia urls . . .")
+        wikidata_query = _sparql_results("""
+            SELECT ?item ?title WHERE {
+                ?item wdt:P31/wdt:P279* wd:Q7397.
+                [ schema:about ?item ; schema:name ?title ;
+                  schema:isPartOf <https://en.wikipedia.org/> ]
+            }
+        """)
+
+        wikipedia_title_dict = {software["title"]["value"]: software["item"]["value"]
+                                for software in wikidata_query["results"]["bindings"]}
+
+        wikipedia_titles = list(wikipedia_title_dict.keys())
+
+        # Node: Using higher batch sizes causes summary response to be silently excluded
+        #       from some nodes.  10 may not be max, but 30 definitely causes drops
+        batch_size = 10
+        properties_set = 0
+        site = wikipedia("en")
+
+        logger.info(f"Querying for Wikipedia summaries in batches of {batch_size} . . .")
+
+        for i, title_batch in enumerate(_generate_batches(wikipedia_titles, batch_size)):
+            if i % 50 == 0:
+                logger.info(f"Fetching summary batch of size {batch_size}: [{i*batch_size+1}/"
+                            f"{math.ceil(len(wikipedia_titles))}]")
+            json_response = list(site.query(format="json", prop="extracts",
+                                            exintro="", explaintext="", titles=title_batch))
+
+            wikipedia_results = [{
+                "software_uri": wikipedia_title_dict[page.title],
+                "summary": page.extract
+            } for page in json_response[0]["pages"] if not hasattr(page, 'missing') and page.extract != ""]
+
+            with self.driver.session() as session:
+                query = session.run("""
+                    UNWIND $summaries as summaries
+                        MATCH (s:Software {uri: summaries.software_uri}) WHERE NOT EXISTS(s.wiki_summary)
+                        SET s.wiki_summary = summaries.summary
+                        """, summaries=wikipedia_results)
+                result = query.consume()
+                properties_set += result.counters.properties_set
+        logger.info(f"Set {properties_set} summary properties")
 
     def update_software_and_classes(self):
         """

@@ -8,6 +8,7 @@ def main():
     tasker.update_software_and_classes()
     tasker.add_genre_to_videogames()
     tasker.add_date_of_release()
+    tasker.add_wikipedia_summary()
 
 
 if __name__ == "__main__":
