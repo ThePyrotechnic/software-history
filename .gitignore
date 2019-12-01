@@ -1,4 +1,5 @@
 .idea
+graph.txt
 
 # Org-mode output files
 *.pdf

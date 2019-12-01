@@ -1,79 +1,93 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
-from urllib.parse import urlparse, parse_qs
 
+from flask import Flask, jsonify, request
 from neo4j import GraphDatabase
+
+app = Flask(__name__)
 
 driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "123456"))
 
 
 def node_to_dict(node):
-    return {
-        "Id": node.id,
+    node_dict = {
+        "Id": str(node.id),
         "Uri": node["uri"],
         "Label": node["label"],
         "Type": next(iter(node.labels))
     }
+    if node.get("release"):
+        node_dict["ReleaseYear"] = node["release"].year
+        node_dict["ReleaseMonth"] = node["release"].month
+        node_dict["ReleaseDay"] = node["release"].day
+
+    return node_dict
 
 
 def relationship_to_dict(relationship):
     return {
-        "Id": relationship.id,
-        "StartId": relationship.start_node.id,
-        "EndId": relationship.end_node.id,
-        "Label": relationship.type
+        "Id": str(relationship.id),
+        "StartId": str(relationship.start_node.id),
+        "EndId": str(relationship.end_node.id),
+        "Type": str(relationship.type)
     }
 
 
-class BasicServer(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path.startswith("/node?"):
-            query_params = parse_qs(urlparse(self.path).query)
-            uri = query_params["uri"][0]
+@app.route("/node", methods=["GET"])
+def get_node():
+    uri = request.args.get("uri", type=str)
+    with driver.session() as session:
+        graph = session.run("MATCH (n1 {uri: $uri})-[r]->(n2) RETURN n1, r, n2", uri=uri).graph()
 
-            if query_params.get("include_relationships"):
-                with driver.session() as session:
-                    graph = session.run("MATCH (n1 {uri: $uri})-[r]->(n2) RETURN n1, r, n2", uri=uri).graph()
+    dict_relationships = [relationship_to_dict(r) for r in graph.relationships]
+    dict_nodes = [node_to_dict(n) for n in graph.nodes]
 
-                dict_relationships = [relationship_to_dict(r) for r in graph.relationships]
-                dict_nodes = [node_to_dict(n) for n in graph.nodes]
-
-                self.send_response(200)
-
-                json_response = bytes(json.dumps({
-                    "Nodes": dict_nodes,
-                    "Relationships": dict_relationships
-                }), encoding="UTF-8")
-
-                self.send_header("Content-Length", str(len(json_response)))
-                self.end_headers()
-
-                self.wfile.write(json_response)
-
-            else:
-                with driver.session() as session:
-                    node = session.run("MATCH (n {uri: $uri}) RETURN n", uri=uri).single().value()
-
-                self.send_response(200)
-
-                json_response = bytes(json.dumps(node_to_dict(node)), encoding="UTF-8")
-
-                self.send_header("Content-Length", str(len(json_response)))
-                self.end_headers()
-
-                self.wfile.write(json_response)
+    return jsonify({
+        "Nodes": dict_nodes,
+        "Relationships": dict_relationships
+    })
 
 
-def run(server_class=HTTPServer, handler_class=BasicServer):
-    port = 8080
-    server_address = ('', port)
-    httpd = server_class(server_address, handler_class)
-    print(f"Server listening at http://localhost:{port}")
-    httpd.serve_forever()
+@app.route("/class", methods=["GET"])
+def get_class():
+    uri = request.args.get("uri", type=str)
+
+    with driver.session() as session:
+        graph = session.run("MATCH (s:Software)-[r:INSTANCE]->(c:Class {uri: $uri}) RETURN s,r,c",
+                            uri=uri).graph()
+
+        dict_relationships = [relationship_to_dict(r) for r in graph.relationships]
+        dict_nodes = [node_to_dict(n) for n in graph.nodes]
+
+    return jsonify({
+        "Nodes": dict_nodes,
+        "Relationships": dict_relationships
+    })
+
+
+@app.route("/graph", methods=["GET"])
+def get_graph():
+    try:
+        with open("graph.txt") as graph_file:
+            response_str = graph_file.read()
+    except FileNotFoundError:
+        with driver.session() as session:
+            graph = session.run("MATCH (n)-[r]->(c:Class) RETURN n, r, c").graph()
+
+        dict_relationships = [relationship_to_dict(r) for r in graph.relationships]
+        dict_nodes = [node_to_dict(n) for n in graph.nodes]
+
+        with open("graph.txt", "w") as graph_file:
+            response_str = json.dumps({
+                "Nodes": dict_nodes,
+                "Relationships": dict_relationships
+            }, separators=(",", ":"))
+            print(response_str, file=graph_file)
+
+    return response_str
 
 
 def main():
-    run()
+    app.run(port=8080, debug=True)
 
 
 if __name__ == "__main__":

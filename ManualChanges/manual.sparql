@@ -1,0 +1,4 @@
+MATCH (s:Software {uri: "http://www.wikidata.org/entity/Q65091731"}) SET s.release = date("2018-11-08") RETURN s
+MATCH (s:Software {uri: "http://www.wikidata.org/entity/Q16766305"}) SET s.release = date("2014-02-26") RETURN s
+MATCH (s:Software {uri: "http://www.wikidata.org/entity/Q339893"}) SET s.release = date("2010-09-25") RETURN s
+MATCH (s:Software {uri: "http://www.wikidata.org/entity/Q15176899"}) SET s.release = date("1994-09-12") RETURN s
